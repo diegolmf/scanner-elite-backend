@@ -10,19 +10,39 @@ const SYMBOLS = [
   'NEARUSDT','FTMUSDT','ALGOUSDT','VETUSDT','TRXUSDT'
 ];
 
-const HOSTS = ['https://api.binance.com','https://api1.binance.com','https://api2.binance.com'];
+// Binance hosts — incluye endpoints alternativos que aceptan servers
+const HOSTS = [
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+  'https://data-api.binance.vision', // endpoint publico sin restricciones
+];
+
 let hostIdx = 0;
-let prevSignals = {}; // symbol -> signalType
+let prevSignals = {};
 let isRunning = false;
 
 async function apiFetch(path) {
   for (let i = 0; i < HOSTS.length; i++) {
+    const host = HOSTS[(hostIdx + i) % HOSTS.length];
     try {
-      const res = await fetch(HOSTS[(hostIdx + i) % HOSTS.length] + path);
-      if (res.ok) { hostIdx = (hostIdx + i) % HOSTS.length; return res.json(); }
-    } catch(e) {}
+      const res = await fetch(host + path, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ScannerBot/1.0)',
+          'Accept': 'application/json',
+        },
+        timeout: 10000,
+      });
+      if (res.ok) {
+        hostIdx = (hostIdx + i) % HOSTS.length;
+        return res.json();
+      }
+    } catch(e) {
+      console.log(`Host ${host} falló: ${e.message}`);
+    }
   }
-  throw new Error('Binance no disponible');
+  throw new Error('Todos los hosts de Binance fallaron');
 }
 
 async function fetchKlines(sym, interval, limit) {
@@ -37,14 +57,12 @@ async function fetch24hr() {
 async function checkAutoClose(prices) {
   const pending = db.getPending();
   if (!pending.length) return;
-
   const stats = db.getStats();
   const RISK_PCT = 0.015, RR = 2;
 
   for (const trade of pending) {
     const price = prices[trade.symbol];
     if (!price) continue;
-
     let result = null;
     if (trade.type === 'LONG') {
       if (price >= trade.tp_price) result = 'win';
@@ -53,42 +71,29 @@ async function checkAutoClose(prices) {
       if (price <= trade.tp_price) result = 'win';
       else if (price >= trade.sl_price) result = 'loss';
     }
-
     if (result) {
       const risk = stats.capital * RISK_PCT;
       const pnl = result === 'win' ? risk * RR : -risk;
-      trade.pnl = pnl;
-      trade.close_price = price;
-
+      trade.pnl = pnl; trade.close_price = price;
       db.closeSignal(trade.id, result, price, pnl);
       db.updateStats(result === 'win' ? 1 : 0, result === 'loss' ? 1 : 0, pnl);
-
       console.log(`🤖 AUTO-CLOSE: ${trade.symbol} ${result.toUpperCase()} P&L: $${pnl.toFixed(0)}`);
       await telegram.sendAutoClose(trade, result);
     }
   }
 }
 
-// Main scan loop
 async function scan() {
   if (isRunning) return;
   isRunning = true;
-
   try {
     const ticker24 = await fetch24hr();
-    const tmap = {};
-    const prices = {};
-    ticker24.forEach(t => {
-      tmap[t.symbol] = t;
-      prices[t.symbol] = parseFloat(t.lastPrice);
-    });
+    const tmap = {}, prices = {};
+    ticker24.forEach(t => { tmap[t.symbol] = t; prices[t.symbol] = parseFloat(t.lastPrice); });
 
-    // Check auto-close first
     await checkAutoClose(prices);
 
-    // Analyze each symbol
     const stats = db.getStats();
-
     for (const sym of SYMBOLS) {
       try {
         const [k1m, k5m, k15m, k1h] = await Promise.all([
@@ -97,69 +102,48 @@ async function scan() {
           fetchKlines(sym, '15m', 50),
           fetchKlines(sym, '1h', 50),
         ]);
-
         const sig = analyze(sym, k1m, k5m, k15m, k1h, tmap[sym], prevSignals[sym]);
         const isNew = prevSignals[sym] !== sig.signalType;
 
-        // Only process new ACTIVO signals
         if (isNew && sig.state === 'ACTIVO' && !sig.signalType.startsWith('CLOSE')) {
-          // Avoid duplicate signals
           if (!db.signalExists(sym, sig.signalType)) {
             const RISK_PCT = 0.015;
             const riskAmt = stats.capital * RISK_PCT;
             const posSz = sig.slPrice ? riskAmt / Math.abs(sig.price - sig.slPrice) : null;
-
             db.addSignal({
-              symbol: sym,
-              type: sig.signalType,
-              state: sig.state,
-              entry_price: sig.price,
-              sl_price: sig.slPrice,
-              tp_price: sig.tpPrice,
-              pos_size: posSz,
-              score: sig.score,
-              confidence: sig.confidence,
-              rsi: sig.rsi,
-              vol_ratio: sig.volRatio
+              symbol: sym, type: sig.signalType, state: sig.state,
+              entry_price: sig.price, sl_price: sig.slPrice, tp_price: sig.tpPrice,
+              pos_size: posSz, score: sig.score, confidence: sig.confidence,
+              rsi: sig.rsi, vol_ratio: sig.volRatio
             });
-
             sig.posSize = posSz;
             await telegram.sendSignal(sig, stats.capital);
-            console.log(`🔔 NUEVA SEÑAL: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}%`);
+            console.log(`🔔 SEÑAL: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}%`);
           }
         }
-
         prevSignals[sym] = sig.signalType;
-
-      } catch (e) {
-        console.error(`Error analizando ${sym}:`, e.message);
+      } catch(e) {
+        console.error(`Error ${sym}: ${e.message}`);
       }
     }
-
-    console.log(`✅ Scan completado: ${new Date().toLocaleTimeString('es-CL')}`);
-
-  } catch (e) {
+    console.log(`✅ Scan: ${new Date().toLocaleTimeString('es-CL')}`);
+  } catch(e) {
     console.error('Error en scan:', e.message);
   } finally {
     isRunning = false;
   }
 }
 
-// Daily report at 8am Chile time
 function scheduleDailyReport() {
   const now = new Date();
   const next8am = new Date();
   next8am.setHours(8, 0, 0, 0);
   if (now >= next8am) next8am.setDate(next8am.getDate() + 1);
-  const msUntil = next8am - now;
   setTimeout(() => {
     const stats = db.getStats();
     telegram.sendStatus(stats);
-    setInterval(() => {
-      const stats = db.getStats();
-      telegram.sendStatus(stats);
-    }, 24 * 60 * 60 * 1000);
-  }, msUntil);
+    setInterval(() => { const s = db.getStats(); telegram.sendStatus(s); }, 24 * 60 * 60 * 1000);
+  }, next8am - now);
 }
 
 function start() {
