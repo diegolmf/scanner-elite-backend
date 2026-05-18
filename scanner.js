@@ -10,15 +10,21 @@ const SYMBOLS = [
   'NEARUSDT','FTMUSDT','ALGOUSDT','VETUSDT','TRXUSDT'
 ];
 
-// Binance hosts — incluye endpoints alternativos que aceptan servers
-const HOSTS = [
-  'https://api.binance.com',
-  'https://api1.binance.com',
-  'https://api2.binance.com',
-  'https://api3.binance.com',
-  'https://data-api.binance.vision', // endpoint publico sin restricciones
-];
+// ============================================================
+// FILTROS DE CALIDAD — ajusta aqui para mejorar win rate
+// ============================================================
+const MIN_SCORE = 12;        // Score minimo (antes era 8) — mas indicadores alineados
+const MIN_CONFIDENCE = 65;   // Confianza minima en % (antes era cualquiera)
+const MIN_VOL_RATIO = 1.2;   // Volumen minimo vs promedio (confirma interes real)
+const MIN_RSI_LONG = 25;     // RSI maximo para entrar LONG (mas sobrevendido = mejor)
+const MAX_RSI_SHORT = 75;    // RSI minimo para entrar SHORT (mas sobrecomprado = mejor)
+// ============================================================
 
+const HOSTS = [
+  'https://api.binance.com','https://api1.binance.com',
+  'https://api2.binance.com','https://api3.binance.com',
+  'https://data-api.binance.vision',
+];
 let hostIdx = 0;
 let prevSignals = {};
 let isRunning = false;
@@ -28,19 +34,11 @@ async function apiFetch(path) {
     const host = HOSTS[(hostIdx + i) % HOSTS.length];
     try {
       const res = await fetch(host + path, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; ScannerBot/1.0)',
-          'Accept': 'application/json',
-        },
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ScannerBot/1.0)', 'Accept': 'application/json' },
         timeout: 10000,
       });
-      if (res.ok) {
-        hostIdx = (hostIdx + i) % HOSTS.length;
-        return res.json();
-      }
-    } catch(e) {
-      console.log(`Host ${host} falló: ${e.message}`);
-    }
+      if (res.ok) { hostIdx = (hostIdx + i) % HOSTS.length; return res.json(); }
+    } catch(e) { console.log(`Host ${host} falló: ${e.message}`); }
   }
   throw new Error('Todos los hosts de Binance fallaron');
 }
@@ -48,12 +46,31 @@ async function apiFetch(path) {
 async function fetchKlines(sym, interval, limit) {
   return apiFetch(`/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`);
 }
-
 async function fetch24hr() {
   return apiFetch(`/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(SYMBOLS))}`);
 }
 
-// Check pending trades auto-close
+// Evalua si una señal pasa los filtros de calidad
+function passesQualityFilter(sig) {
+  const score = sig.longScore + sig.shortScore;
+  const volR = parseFloat(sig.volRatio);
+
+  // Score minimo
+  if (score < MIN_SCORE) return { ok: false, reason: `Score ${score} < ${MIN_SCORE}` };
+
+  // Confianza minima
+  if (sig.confidence < MIN_CONFIDENCE) return { ok: false, reason: `Conf ${sig.confidence}% < ${MIN_CONFIDENCE}%` };
+
+  // Volumen minimo
+  if (volR < MIN_VOL_RATIO) return { ok: false, reason: `VolR ${volR}x < ${MIN_VOL_RATIO}x` };
+
+  // RSI apropiado para la direccion
+  if (sig.signalType === 'LONG' && sig.rsi > 60) return { ok: false, reason: `RSI ${sig.rsi} alto para LONG` };
+  if (sig.signalType === 'SHORT' && sig.rsi < 40) return { ok: false, reason: `RSI ${sig.rsi} bajo para SHORT` };
+
+  return { ok: true };
+}
+
 async function checkAutoClose(prices) {
   const pending = db.getPending();
   if (!pending.length) return;
@@ -97,19 +114,23 @@ async function scan() {
     for (const sym of SYMBOLS) {
       try {
         const [k1m, k5m, k15m, k1h] = await Promise.all([
-          fetchKlines(sym, '1m', 30),
-          fetchKlines(sym, '5m', 40),
-          fetchKlines(sym, '15m', 50),
-          fetchKlines(sym, '1h', 50),
+          fetchKlines(sym, '1m', 30), fetchKlines(sym, '5m', 40),
+          fetchKlines(sym, '15m', 50), fetchKlines(sym, '1h', 50),
         ]);
         const sig = analyze(sym, k1m, k5m, k15m, k1h, tmap[sym], prevSignals[sym]);
         const isNew = prevSignals[sym] !== sig.signalType;
 
         if (isNew && sig.state === 'ACTIVO' && !sig.signalType.startsWith('CLOSE')) {
-          if (!db.signalExists(sym, sig.signalType)) {
+          // Aplicar filtros de calidad
+          const quality = passesQualityFilter(sig);
+
+          if (!quality.ok) {
+            console.log(`⏭ Señal descartada ${sym} ${sig.signalType}: ${quality.reason}`);
+          } else if (!db.signalExists(sym, sig.signalType)) {
             const RISK_PCT = 0.015;
             const riskAmt = stats.capital * RISK_PCT;
             const posSz = sig.slPrice ? riskAmt / Math.abs(sig.price - sig.slPrice) : null;
+
             db.addSignal({
               symbol: sym, type: sig.signalType, state: sig.state,
               entry_price: sig.price, sl_price: sig.slPrice, tp_price: sig.tpPrice,
@@ -118,7 +139,7 @@ async function scan() {
             });
             sig.posSize = posSz;
             await telegram.sendSignal(sig, stats.capital);
-            console.log(`🔔 SEÑAL: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}%`);
+            console.log(`🔔 SEÑAL ELITE: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}% VolR:${sig.volRatio}x`);
           }
         }
         prevSignals[sym] = sig.signalType;
@@ -147,7 +168,8 @@ function scheduleDailyReport() {
 }
 
 function start() {
-  console.log('🚀 Scanner Elite iniciado');
+  console.log(`🚀 Scanner Elite iniciado`);
+  console.log(`📊 Filtros: Score>=${MIN_SCORE} | Conf>=${MIN_CONFIDENCE}% | VolR>=${MIN_VOL_RATIO}x`);
   scan();
   setInterval(scan, 15000);
   scheduleDailyReport();
