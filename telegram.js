@@ -5,12 +5,6 @@ const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 let bot = null;
 
-function init() {
-  if (!TOKEN) { console.log('⚠ Telegram token no configurado'); return; }
-  bot = new TelegramBot(TOKEN, { polling: false });
-  console.log('✅ Telegram bot inicializado');
-}
-
 function fp(p) {
   if (!p) return '-';
   if (p >= 1000) return p.toFixed(1);
@@ -18,13 +12,95 @@ function fp(p) {
   return p.toFixed(6);
 }
 
+function init(db) {
+  if (!TOKEN) { console.log('⚠ Telegram token no configurado'); return; }
+  bot = new TelegramBot(TOKEN, { polling: true });
+  console.log('✅ Telegram bot inicializado con comandos');
+
+  // /status — reporte inmediato
+  bot.onText(/\/status/, async (msg) => {
+    const stats = db.getStats();
+    const history = db.getHistory(1000);
+    const closed = history.filter(t => t.result !== 'pending');
+    const wins = closed.filter(t => t.result === 'win');
+    const losses = closed.filter(t => t.result === 'loss');
+    const pending = history.filter(t => t.result === 'pending');
+    const wr = closed.length > 0 ? Math.round(wins.length / closed.length * 100) : 0;
+    const avgWin = wins.length > 0 ? wins.reduce((s,t) => s + t.pnl, 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s,t) => s + t.pnl, 0) / losses.length) : 0;
+    const ratio = avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : '-';
+
+    const text = `📊 *ESTADO ACTUAL — SCANNER ELITE*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `🏆 Win Rate: *${wr}%*\n` +
+      `💵 P&L Total: *$${stats.total_pnl.toFixed(0)} USD*\n` +
+      `📈 Operaciones: ${closed.length}\n` +
+      `✅ Ganadoras: ${wins.length}\n` +
+      `❌ Perdedoras: ${losses.length}\n` +
+      `⏳ Pendientes: ${pending.length}\n` +
+      `📐 Ratio G/P: ${ratio}\n` +
+      `💰 Capital: $${stats.capital}\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `🔧 Filtros activos: Score≥12 | Conf≥65% | VolR≥1.2x\n` +
+      `⏰ ${new Date().toLocaleString('es-CL')}`;
+
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  });
+
+  // /pendientes — ver operaciones abiertas
+  bot.onText(/\/pendientes/, async (msg) => {
+    const pending = db.getHistory(100).filter(t => t.result === 'pending');
+    if (!pending.length) {
+      await bot.sendMessage(msg.chat.id, '📭 No hay operaciones pendientes.');
+      return;
+    }
+    let text = `⏳ *OPERACIONES PENDIENTES (${pending.length})*\n━━━━━━━━━━━━━━━━━\n`;
+    pending.forEach(t => {
+      const base = t.symbol.replace('USDT', '');
+      const em = t.type === 'LONG' ? '🟢' : '🔴';
+      text += `${em} *${base}* ${t.type}\n`;
+      text += `  Entry: $${fp(t.entry_price)} | SL: $${fp(t.sl_price)} | TP: $${fp(t.tp_price)}\n`;
+      text += `  Score: ${t.score}pts | ${t.created_at}\n\n`;
+    });
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  });
+
+  // /filtros — ver configuracion actual
+  bot.onText(/\/filtros/, async (msg) => {
+    const text = `🔧 *FILTROS ACTIVOS*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `📊 Score mínimo: *12 pts*\n` +
+      `🎯 Confianza mínima: *65%*\n` +
+      `📈 Volumen mínimo: *1.2x*\n` +
+      `📉 RSI máx LONG: *60*\n` +
+      `📈 RSI mín SHORT: *40*\n` +
+      `💰 Riesgo por op: *1.5% del capital*\n` +
+      `📐 Ratio SL/TP: *1:2*`;
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  });
+
+  // /ayuda — lista de comandos
+  bot.onText(/\/ayuda|\/help|\/start/, async (msg) => {
+    const text = `🤖 *SCANNER ELITE — COMANDOS*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `📊 /status — Reporte completo de rendimiento\n` +
+      `⏳ /pendientes — Ver operaciones abiertas\n` +
+      `🔧 /filtros — Ver configuracion actual\n` +
+      `❓ /ayuda — Esta lista de comandos\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `_El bot envia señales automaticamente 24/7_`;
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  });
+}
+
 async function sendSignal(sig, capital) {
   if (!bot) return;
   const RISK_PCT = 0.015, RR = 2;
   const base = sig.symbol.replace('USDT', '');
-  const emoji = sig.signalType === 'LONG' ? '🟢' : sig.signalType === 'SHORT' ? '🔴' : '🟡';
+  const emoji = sig.signalType === 'LONG' ? '🟢' : '🔴';
   const riskAmt = (capital * RISK_PCT).toFixed(0);
   const posSize = sig.slPrice ? ((capital * RISK_PCT) / Math.abs(sig.price - sig.slPrice)).toFixed(4) : '-';
+  const score = sig.longScore + sig.shortScore;
 
   const msg = `${emoji} *${sig.signalType} — ${base}/USDT*\n` +
     `━━━━━━━━━━━━━━━━━\n` +
@@ -32,7 +108,7 @@ async function sendSignal(sig, capital) {
     `🛑 *Stop Loss:* \`$${fp(sig.slPrice)}\`\n` +
     `🎯 *Take Profit:* \`$${fp(sig.tpPrice)}\`\n` +
     `━━━━━━━━━━━━━━━━━\n` +
-    `📊 Score: *${sig.score}pts* | Conf: *${sig.confidence}%*\n` +
+    `📊 Score: *${score}pts* | Conf: *${sig.confidence}%*\n` +
     `📈 RSI: ${sig.rsi} | VolR: ${sig.volRatio}x\n` +
     `💵 Pos: ${posSize} ${base} | Riesgo: $${riskAmt}\n` +
     `🔍 ${sig.signals.slice(0, 3).join(' · ')}\n` +
@@ -41,7 +117,7 @@ async function sendSignal(sig, capital) {
 
   try {
     await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown' });
-  } catch (e) {
+  } catch(e) {
     console.error('Telegram error:', e.message);
   }
 }
@@ -65,7 +141,7 @@ async function sendAutoClose(trade, result) {
 
   try {
     await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown' });
-  } catch (e) {
+  } catch(e) {
     console.error('Telegram error:', e.message);
   }
 }
@@ -85,7 +161,7 @@ async function sendStatus(stats) {
     `⏰ ${new Date().toLocaleString('es-CL')}`;
   try {
     await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown' });
-  } catch (e) {
+  } catch(e) {
     console.error('Telegram error:', e.message);
   }
 }
