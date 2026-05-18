@@ -78,6 +78,6 @@ app.get('/health', (req, res) => {
 // ============================================================
 app.listen(PORT, () => {
   console.log(`🌐 Server corriendo en puerto ${PORT}`);
-  telegram.init();
+  telegram.init(db);
   scanner.start();
 });
