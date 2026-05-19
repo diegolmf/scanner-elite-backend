@@ -11,13 +11,10 @@ const SYMBOLS = [
 ];
 
 // ============================================================
-// FILTROS DE CALIDAD — ajusta aqui para mejorar win rate
+// FILTROS DE CALIDAD
 // ============================================================
-const MIN_SCORE = 12;        // Score minimo (antes era 8) — mas indicadores alineados
-const MIN_CONFIDENCE = 65;   // Confianza minima en % (antes era cualquiera)
-const MIN_VOL_RATIO = 1.2;   // Volumen minimo vs promedio (confirma interes real)
-const MIN_RSI_LONG = 25;     // RSI maximo para entrar LONG (mas sobrevendido = mejor)
-const MAX_RSI_SHORT = 75;    // RSI minimo para entrar SHORT (mas sobrecomprado = mejor)
+const MIN_SCORE = 12;        // Score minimo — mas indicadores alineados
+const MIN_CONFIDENCE = 65;   // Confianza minima en %
 // ============================================================
 
 const HOSTS = [
@@ -53,20 +50,12 @@ async function fetch24hr() {
 // Evalua si una señal pasa los filtros de calidad
 function passesQualityFilter(sig) {
   const score = sig.longScore + sig.shortScore;
-  const volR = parseFloat(sig.volRatio);
 
   // Score minimo
   if (score < MIN_SCORE) return { ok: false, reason: `Score ${score} < ${MIN_SCORE}` };
 
   // Confianza minima
   if (sig.confidence < MIN_CONFIDENCE) return { ok: false, reason: `Conf ${sig.confidence}% < ${MIN_CONFIDENCE}%` };
-
-  // Volumen minimo
-  if (volR < MIN_VOL_RATIO) return { ok: false, reason: `VolR ${volR}x < ${MIN_VOL_RATIO}x` };
-
-  // RSI apropiado para la direccion
-  if (sig.signalType === 'LONG' && sig.rsi > 60) return { ok: false, reason: `RSI ${sig.rsi} alto para LONG` };
-  if (sig.signalType === 'SHORT' && sig.rsi < 40) return { ok: false, reason: `RSI ${sig.rsi} bajo para SHORT` };
 
   return { ok: true };
 }
@@ -169,7 +158,7 @@ function scheduleDailyReport() {
 
 function start() {
   console.log(`🚀 Scanner Elite iniciado`);
-  console.log(`📊 Filtros: Score>=${MIN_SCORE} | Conf>=${MIN_CONFIDENCE}% | VolR>=${MIN_VOL_RATIO}x`);
+  console.log(`📊 Filtros: Score>=${MIN_SCORE} | Conf>=${MIN_CONFIDENCE}%`);
   scan();
   setInterval(scan, 15000);
   scheduleDailyReport();
