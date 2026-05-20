@@ -166,4 +166,23 @@ async function sendStatus(stats) {
   }
 }
 
-module.exports = { init, sendSignal, sendAutoClose, sendStatus };
+async function sendStartup() {
+  if (!bot) return;
+  const now = new Date().toLocaleString('es-CL');
+  const msg = `🟢 *SCANNER ELITE ONLINE*\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `✅ Servidor iniciado correctamente\n` +
+    `📊 Filtros: Score≥12 | Conf≥65%\n` +
+    `🔄 Escaneando 20 pares cada 15s\n` +
+    `━━━━━━━━━━━━━━━━━\n` +
+    `⏰ ${now}\n` +
+    `_Escribe /ayuda para ver los comandos_`;
+  try {
+    await bot.sendMessage(CHAT_ID, msg, { parse_mode: 'Markdown' });
+    console.log('✅ Mensaje de inicio enviado a Telegram');
+  } catch(e) {
+    console.error('Telegram startup error:', e.message);
+  }
+}
+
+module.exports = { init, sendSignal, sendAutoClose, sendStatus, sendStartup };
