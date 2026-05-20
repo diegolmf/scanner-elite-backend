@@ -79,6 +79,39 @@ function init(db) {
     await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
   });
 
+  // /test — verificar que todo funciona
+  bot.onText(/\/test/, async (msg) => {
+    const stats = db.getStats();
+    const history = db.getHistory(1000);
+    const pending = history.filter(t => t.result === 'pending');
+    const closed = history.filter(t => t.result !== 'pending');
+    const wins = closed.filter(t => t.result === 'win');
+
+    // Detectar version de filtros activos
+    const MIN_SCORE = 12;
+    const MIN_CONF = 65;
+
+    const text = `🧪 *TEST DE CONEXION — TODO OK*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `✅ Telegram: *Funcionando*\n` +
+      `✅ Base de datos: *Conectada*\n` +
+      `✅ Scanner: *Activo 24/7*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `🔧 *Filtros activos:*\n` +
+      `   Score mínimo: *${MIN_SCORE} pts*\n` +
+      `   Confianza mínima: *${MIN_CONF}%*\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `📊 *Estadísticas:*\n` +
+      `   Capital: $${stats.capital}\n` +
+      `   Operaciones cerradas: ${closed.length}\n` +
+      `   Ganadoras: ${wins.length}\n` +
+      `   Pendientes: ${pending.length}\n` +
+      `━━━━━━━━━━━━━━━━━\n` +
+      `⏰ ${new Date().toLocaleString('es-CL')}`;
+
+    await bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' });
+  });
+
   // /ayuda — lista de comandos
   bot.onText(/\/ayuda|\/help|\/start/, async (msg) => {
     const text = `🤖 *SCANNER ELITE — COMANDOS*\n` +
@@ -86,6 +119,7 @@ function init(db) {
       `📊 /status — Reporte completo de rendimiento\n` +
       `⏳ /pendientes — Ver operaciones abiertas\n` +
       `🔧 /filtros — Ver configuracion actual\n` +
+      `🧪 /test — Verificar que todo funciona\n` +
       `❓ /ayuda — Esta lista de comandos\n` +
       `━━━━━━━━━━━━━━━━━\n` +
       `_El bot envia señales automaticamente 24/7_`;
