@@ -76,8 +76,12 @@ app.get('/health', (req, res) => {
 // ============================================================
 // START
 // ============================================================
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🌐 Server corriendo en puerto ${PORT}`);
   telegram.init(db);
+  // Espera 3 segundos para que el bot se inicialice antes de mandar mensaje
+  setTimeout(async () => {
+    await telegram.sendStartup();
+  }, 3000);
   scanner.start();
 });
