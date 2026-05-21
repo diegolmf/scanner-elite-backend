@@ -13,7 +13,7 @@ const SYMBOLS = [
 // ============================================================
 // FILTROS DE CALIDAD
 // ============================================================
-const MIN_SCORE = 12;        // Score minimo — mas indicadores alineados
+const MIN_SCORE = 12;        // Score minimo
 const MIN_CONFIDENCE = 65;   // Confianza minima en %
 // ============================================================
 
@@ -47,16 +47,10 @@ async function fetch24hr() {
   return apiFetch(`/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(SYMBOLS))}`);
 }
 
-// Evalua si una señal pasa los filtros de calidad
 function passesQualityFilter(sig) {
   const score = sig.longScore + sig.shortScore;
-
-  // Score minimo
   if (score < MIN_SCORE) return { ok: false, reason: `Score ${score} < ${MIN_SCORE}` };
-
-  // Confianza minima
   if (sig.confidence < MIN_CONFIDENCE) return { ok: false, reason: `Conf ${sig.confidence}% < ${MIN_CONFIDENCE}%` };
-
   return { ok: true };
 }
 
@@ -65,7 +59,6 @@ async function checkAutoClose(prices) {
   if (!pending.length) return;
   const stats = db.getStats();
   const RISK_PCT = 0.015, RR = 2;
-
   for (const trade of pending) {
     const price = prices[trade.symbol];
     if (!price) continue;
@@ -96,9 +89,7 @@ async function scan() {
     const ticker24 = await fetch24hr();
     const tmap = {}, prices = {};
     ticker24.forEach(t => { tmap[t.symbol] = t; prices[t.symbol] = parseFloat(t.lastPrice); });
-
     await checkAutoClose(prices);
-
     const stats = db.getStats();
     for (const sym of SYMBOLS) {
       try {
@@ -108,18 +99,14 @@ async function scan() {
         ]);
         const sig = analyze(sym, k1m, k5m, k15m, k1h, tmap[sym], prevSignals[sym]);
         const isNew = prevSignals[sym] !== sig.signalType;
-
         if (isNew && sig.state === 'ACTIVO' && !sig.signalType.startsWith('CLOSE')) {
-          // Aplicar filtros de calidad
           const quality = passesQualityFilter(sig);
-
           if (!quality.ok) {
             console.log(`⏭ Señal descartada ${sym} ${sig.signalType}: ${quality.reason}`);
           } else if (!db.signalExists(sym, sig.signalType)) {
             const RISK_PCT = 0.015;
             const riskAmt = stats.capital * RISK_PCT;
             const posSz = sig.slPrice ? riskAmt / Math.abs(sig.price - sig.slPrice) : null;
-
             db.addSignal({
               symbol: sym, type: sig.signalType, state: sig.state,
               entry_price: sig.price, sl_price: sig.slPrice, tp_price: sig.tpPrice,
@@ -128,7 +115,7 @@ async function scan() {
             });
             sig.posSize = posSz;
             await telegram.sendSignal(sig, stats.capital);
-            console.log(`🔔 SEÑAL ELITE: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}% VolR:${sig.volRatio}x`);
+            console.log(`🔔 SEÑAL ELITE: ${sym} ${sig.signalType} Score:${sig.score} Conf:${sig.confidence}%`);
           }
         }
         prevSignals[sym] = sig.signalType;
@@ -158,7 +145,7 @@ function scheduleDailyReport() {
 
 function start() {
   console.log(`🚀 Scanner Elite iniciado`);
-  console.log(`📊 Filtros: Score>=${MIN_SCORE} | Conf>=${MIN_CONFIDENCE}%`);
+  console.log(`📊 Filtros activos: Score>=${MIN_SCORE}pts | Conf>=${MIN_CONFIDENCE}%`);
   scan();
   setInterval(scan, 15000);
   scheduleDailyReport();
