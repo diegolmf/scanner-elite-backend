@@ -13,7 +13,7 @@ const SYMBOLS = [
 // ============================================================
 // FILTROS DE CALIDAD
 // ============================================================
-const MIN_SCORE = 12;        // Score minimo
+const MIN_SCORE = 10;        // Score minimo
 const MIN_CONFIDENCE = 65;   // Confianza minima en %
 // ============================================================
 
