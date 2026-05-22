@@ -10,19 +10,12 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
 
-// ============================================================
-// API ENDPOINTS
-// ============================================================
-
-// Get history
 app.get('/api/history', (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
   res.json(db.getHistory(limit));
 });
 
-// Get stats
 app.get('/api/stats', (req, res) => {
   const stats = db.getStats();
   const history = db.getHistory(1000);
@@ -30,20 +23,18 @@ app.get('/api/stats', (req, res) => {
   const wins = closed.filter(t => t.result === 'win');
   const losses = closed.filter(t => t.result === 'loss');
   const pending = history.filter(t => t.result === 'pending');
-  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
-
+  const avgWin = wins.length > 0 ? wins.reduce((s,t) => s+t.pnl, 0)/wins.length : 0;
+  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s,t) => s+t.pnl, 0)/losses.length) : 0;
   res.json({
     ...stats,
-    win_rate: closed.length > 0 ? Math.round(wins.length / closed.length * 100) : null,
+    win_rate: closed.length > 0 ? Math.round(wins.length/closed.length*100) : null,
     pending_count: pending.length,
     avg_win: avgWin.toFixed(2),
     avg_loss: avgLoss.toFixed(2),
-    ratio: avgLoss > 0 ? (avgWin / avgLoss).toFixed(2) : '-'
+    ratio: avgLoss > 0 ? (avgWin/avgLoss).toFixed(2) : '-'
   });
 });
 
-// Update capital
 app.post('/api/capital', (req, res) => {
   const { capital } = req.body;
   if (!capital || capital < 10) return res.status(400).json({ error: 'Capital invalido' });
@@ -51,37 +42,24 @@ app.post('/api/capital', (req, res) => {
   res.json({ ok: true, capital });
 });
 
-// Manual close (win/loss)
 app.post('/api/close/:id', (req, res) => {
   const { result } = req.body;
   const { id } = req.params;
-  if (!['win', 'loss'].includes(result)) return res.status(400).json({ error: 'Resultado invalido' });
+  if (!['win','loss'].includes(result)) return res.status(400).json({ error: 'Resultado invalido' });
   const stats = db.getStats();
-  const RISK_PCT = 0.015, RR = 2;
-  const pnl = result === 'win' ? stats.capital * RISK_PCT * RR : -(stats.capital * RISK_PCT);
+  const pnl = result === 'win' ? stats.capital*0.015*2 : -(stats.capital*0.015);
   db.closeSignal(parseInt(id), result, null, pnl);
-  db.updateStats(result === 'win' ? 1 : 0, result === 'loss' ? 1 : 0, pnl);
+  db.updateStats(result==='win'?1:0, result==='loss'?1:0, pnl);
   res.json({ ok: true });
 });
 
-// Health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'running',
-    uptime: process.uptime(),
-    time: new Date().toLocaleString('es-CL')
-  });
+  res.json({ status: 'running', uptime: process.uptime(), time: new Date().toLocaleString('es-CL') });
 });
 
-// ============================================================
-// START
-// ============================================================
 app.listen(PORT, async () => {
   console.log(`🌐 Server corriendo en puerto ${PORT}`);
   telegram.init(db);
-  // Espera 3 segundos para que el bot se inicialice antes de mandar mensaje
-  setTimeout(async () => {
-    await telegram.sendStartup();
-  }, 3000);
+  setTimeout(async () => { await telegram.sendStartup(); }, 3000);
   scanner.start();
 });
