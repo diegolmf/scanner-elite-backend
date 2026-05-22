@@ -3,7 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.TELEGRAM_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-const MIN_SCORE = 12;
+const MIN_SCORE = 10;
 const MIN_CONFIDENCE = 65;
 
 let bot = null;
